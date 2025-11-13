@@ -28,6 +28,7 @@ namespace MedicalRenderDemo
 
         public D3DHost()
         {
+            _mode = DirectXRenderer.RenderMode.None_Slice;
             InitializeComponent();
             _panel = new WinFormsPanel();
             host.Child = _panel;
@@ -43,6 +44,45 @@ namespace MedicalRenderDemo
             host.Child = _panel;
             Loaded += OnLoaded;
             Unloaded += OnUnloaded;
+        }
+
+        public void SetDicomSeries(DicomSeries series)
+        {
+            _series = series;
+            _renderer?.SetSeries(series, _mode); // 通知渲染器更新数据
+        }
+
+        public void SetDicomSeries(DicomSeries series, DirectXRenderer.RenderMode mode)
+        {
+            _mode = mode;
+            SetDicomSeries(series);
+        }
+
+        // D3DHost.xaml.cs —— 在类中添加
+        public int CurrentSliceIndex
+        {
+            get => _renderer?.CurrentSliceIndex ?? 0;
+            set
+            {
+                if (_renderer != null)
+                {
+                    _renderer.CurrentSliceIndex = value;
+                }
+            }
+        }
+
+        // 可选：添加 WW/WL 控制
+        public (float ww, float wl) Windowing
+        {
+            get => _renderer != null ? (_renderer.WindowWidth, _renderer.WindowLevel) : (400, 40);
+            set
+            {
+                if (_renderer != null)
+                {
+                    _renderer.WindowWidth = value.ww;
+                    _renderer.WindowLevel = value.wl;
+                }
+            }
         }
 
         private void OnLoaded(object sender, RoutedEventArgs e)
@@ -68,13 +108,5 @@ namespace MedicalRenderDemo
         {
             _renderer?.Dispose();
         }
-
-        public void SetDicomSeries(DicomSeries series, DirectXRenderer.RenderMode mode)
-        {
-            _mode = mode;
-            _series = series;
-            _renderer?.SetSeries(series, _mode); // 通知渲染器更新数据
-        }
-
     }
 }

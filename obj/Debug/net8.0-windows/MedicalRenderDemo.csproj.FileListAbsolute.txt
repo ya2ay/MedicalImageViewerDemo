@@ -44,3 +44,4 @@ D:\Project\MedicalRenderDemo\obj\Debug\net8.0-windows\refint\MedicalRenderDemo.d
 D:\Project\MedicalRenderDemo\obj\Debug\net8.0-windows\MedicalRenderDemo.pdb
 D:\Project\MedicalRenderDemo\obj\Debug\net8.0-windows\MedicalRenderDemo.genruntimeconfig.cache
 D:\Project\MedicalRenderDemo\obj\Debug\net8.0-windows\ref\MedicalRenderDemo.dll
+D:\Project\MedicalRenderDemo\obj\Debug\net8.0-windows\MedicalRenderDemo.sourcelink.json

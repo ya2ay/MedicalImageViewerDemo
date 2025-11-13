@@ -2,6 +2,7 @@
 using FellowOakDicom.Imaging;
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -16,62 +17,77 @@ namespace MedicalRenderDemo
         public int Rows => Files[0].Dataset.GetValue<int>(DicomTag.Rows, 0);
         public int Columns => Files[0].Dataset.GetValue<int>(DicomTag.Columns, 0);
         public int NumberOfFrames => Files.Count;
+        public double SliceThickness => Files[0].Dataset.GetValue<double>(DicomTag.SliceThickness, 0);
+        public double PixelSpacingX => Files[0].Dataset.GetValues<double>(DicomTag.PixelSpacing)[1];
+        public double PixelSpacingY => Files[0].Dataset.GetValues<double>(DicomTag.PixelSpacing)[0];
+        public int WindowWidth => Files[0].Dataset.GetSingleValue<int>(DicomTag.WindowWidth);
+        public int WindowCenter => Files[0].Dataset.GetSingleValue<int>(DicomTag.WindowCenter);
 
-        public class VolumeData
+    public class VolumeData
         {
-            public short[] Voxels; // 16-bit 像素
+            public ushort[] Voxels; // 16-bit 像素
             public int Width, Height, Depth;
             public double SpacingX, SpacingY, SpacingZ;
         }
-        public static DicomSeries LoadFromFolder(string folderPath)
+
+        // DicomSeries.cs —— 替换 BuildVolume 方法
+        public VolumeData BuildVolume()
         {
-            var series = new DicomSeries();
-            var files = Directory.GetFiles(folderPath, "*.*", SearchOption.TopDirectoryOnly)
-                                 .Where(f => IsDicomFile(f))
-                                 .Select(f => DicomFile.Open(f))
-                                 .ToList();
+            if (Files.Count == 0) throw new InvalidOperationException("No DICOM files loaded.");
 
-            if (files.Count == 0) throw new ArgumentException("No DICOM files found.");
+            int w = Columns;
+            int h = Rows;
+            int d = NumberOfFrames;
 
-            // 按 ImagePositionPatient 排序（Z 轴）
-            files.Sort((a, b) =>
-            {
-                var posA = a.Dataset.GetValues<double>(DicomTag.ImagePositionPatient);
-                var posB = b.Dataset.GetValues<double>(DicomTag.ImagePositionPatient);
-                return posA[2].CompareTo(posB[2]); // Z 坐标
-            });
+            var voxels = new ushort[w * h * d];
 
-            series.Files.AddRange(files);
-            return series;
-        }
-
-        private static bool IsDicomFile(string path)
-        {
-            try
-            {
-                using var stream = File.OpenRead(path);
-                var buffer = new byte[128 + 4];
-                stream.Read(buffer, 0, buffer.Length);
-                return Encoding.ASCII.GetString(buffer, 128, 4) == "DICM";
-            }
-            catch { return false; }
-        }
-
-        public VolumeData BuildVolume(DicomSeries series)
-        {
-            int w = series.Columns;
-            int h = series.Rows;
-            int d = series.NumberOfFrames;
-
-            var voxels = new short[w * h * d];
             for (int i = 0; i < d; i++)
             {
-                var pixelData = DicomPixelData.Create(series.Files[i].Dataset);
+                var dataset = Files[i].Dataset;
+                var pixelData = DicomPixelData.Create(dataset);
                 var frame = pixelData.GetFrame(0);
-                Buffer.BlockCopy(frame.Data, 0, voxels, i * w * h * sizeof(short), w * h * sizeof(short));
+
+                // 获取原始字节
+                byte[] rawBytes = frame.Data;
+
+                bool isSigned = dataset.GetValue<ushort>(DicomTag.PixelRepresentation, 0) == 1;
+                if (!dataset.TryGetValue<int>(DicomTag.BitsAllocated, 0, out int bitsAllocated))
+                {
+                    bitsAllocated = 16; // 默认值
+                }
+                //int bitsAllocated = dataset.GetValue<int>(DicomTag.BitsAllocated, 16);
+
+                if (bitsAllocated == 16)
+                {
+                    for (int j = 0; j < w * h; j++)
+                    {
+                        ushort value = BitConverter.ToUInt16(rawBytes, j * 2);
+                        voxels[i * w * h + j] = isSigned ? unchecked((ushort)value) : (ushort)value;
+                    }
+                }
+                else if (bitsAllocated == 8)
+                {
+                    for (int j = 0; j < w * h; j++)
+                    {
+                        voxels[i * w * h + j] = (ushort)rawBytes[j];
+                    }
+                }
+                else
+                {
+                    throw new NotSupportedException($"BitsAllocated={bitsAllocated} not supported.");
+                }
             }
 
-            return new VolumeData { Voxels = voxels, Width = w, Height = h, Depth = d };
+            return new VolumeData
+            {
+                Voxels = voxels,
+                Width = w,
+                Height = h,
+                Depth = d,
+                SpacingX = PixelSpacingX,
+                SpacingY = PixelSpacingY,
+                SpacingZ = SliceThickness
+            };
         }
     }
 }

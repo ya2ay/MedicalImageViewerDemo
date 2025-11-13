@@ -9,6 +9,11 @@ using Vortice.Mathematics;
 using System.Runtime.InteropServices;
 using SharpGen.Runtime;
 using Vortice.Direct3D;
+using System.Numerics;
+using System.Windows;
+using Vortice;
+using Vortice.D3DCompiler;
+using System.Diagnostics;
 
 namespace MedicalRenderDemo
 {
@@ -16,6 +21,7 @@ namespace MedicalRenderDemo
     {
         public enum RenderMode
         {
+            None_Slice,
             AxialSlice,
             CoronalSlice,
             SagittalSlice,
@@ -23,17 +29,48 @@ namespace MedicalRenderDemo
         }
 
         private readonly IntPtr _hwnd;
-        public int Width { get; }
-        public int Height { get; }
+        private int _width;
+        private int _height;
+        public int Width
+        {
+            get => _width;
+            private set => _width = value; // 允许类内部修改
+        }
+
+        public int Height
+        {
+            get => _height;
+            private set => _height = value;
+        }
 
         private ID3D11Device? _device;
         private ID3D11DeviceContext? _context;
         private IDXGISwapChain1? _swapChain;
         private ID3D11RenderTargetView? _renderTargetView;
-        private ID3D11ShaderResourceView? _textureView;
-        private ID3D11Texture2D? _texture;
+
+        // 2D texture for slice display
+        private ID3D11Texture2D? _sliceTexture;
+        private ID3D11ShaderResourceView? _sliceTextureView;
+
+        // 3D volume texture
+        private ID3D11Texture3D? _volumeTexture;
+        private ID3D11ShaderResourceView? _volumeTextureView;
+
+        // Shaders and pipeline
+        private ID3D11VertexShader? _vertexShader;
+        private ID3D11PixelShader? _pixelShader;
+        private ID3D11InputLayout? _inputLayout;
+        private ID3D11Buffer? _vertexBuffer;
+        private ID3D11SamplerState? _sampler;
+
         private DicomSeries? _series;
-        private RenderMode _renderMode;
+        private DicomSeries.VolumeData? _volumeData;
+        private RenderMode _renderMode = RenderMode.None_Slice;
+
+        // Rendering parameters
+        public int CurrentSliceIndex { get; set; } = 0;
+        public float WindowWidth { get; set; } = 400;   // CT default
+        public float WindowLevel { get; set; } = 40;    // CT soft tissue
 
         public DirectXRenderer(IntPtr hwnd, int width, int height)
         {
@@ -92,7 +129,97 @@ namespace MedicalRenderDemo
             _swapChain = dxgiFactory.CreateSwapChainForHwnd(_device, _hwnd, swapChainDesc);
 
             CreateRenderTargetView();
-            CreateTexture();
+            CreateShadersAndBuffers();
+            CreateSamplers();
+            //CreateTexture();
+        }
+
+        private void CreateShadersAndBuffers()
+        {
+            // Fullscreen quad vertices (NDC space)
+            var vertices = new[]
+            {
+                new Vector4(-1, -1, 0, 1),
+                new Vector4(-1,  1, 0, 1),
+                new Vector4( 1,  1, 0, 1),
+                new Vector4( 1, -1, 0, 1)
+            };
+            var vertexBytes = MemoryMarshal.AsBytes(vertices.AsSpan()).ToArray();
+
+            var vbDesc = new BufferDescription
+            {
+                ByteWidth = (uint)vertexBytes.Length,
+                Usage = ResourceUsage.Default,
+                BindFlags = BindFlags.VertexBuffer
+            };
+
+            _vertexBuffer = _device!.CreateBuffer(vbDesc);
+
+            // HLSL shaders as strings
+            string vsCode = @"
+                float4 main(float4 pos : POSITION) : SV_POSITION
+                {
+                    return pos;
+                }";
+
+            string psCode = @"
+                Texture2D g_Texture : register(t0);
+                SamplerState g_Sampler : register(s0);
+
+                float4 main(float4 pos : SV_POSITION) : SV_TARGET
+                {
+                    float2 uv = pos.xy / pos.w;
+                    uv.y = 1.0f - uv.y; // flip Y
+                    return g_Texture.Sample(g_Sampler, uv);
+                }";
+
+
+            Result vsResult = Compiler.Compile(
+                shaderSource: vsCode,
+                entryPoint: "main",
+                sourceName: "FullScreenVS.hlsl",
+                profile: "vs_5_0", 
+                out Blob vsBlob,
+                out Blob vsErrorBlob
+            );
+
+            Result psResult = Compiler.Compile(
+                shaderSource: psCode,
+                entryPoint: "main",
+                sourceName: "FullScreenPS.hlsl",
+                profile: "ps_5_0",
+                out Blob psBlob,
+                out Blob psErrorBlob
+            );
+
+            if (vsResult.Code == null || psResult.Code == null)
+            {
+                throw new InvalidOperationException(
+                    $"Shader compilation failed:\nVS: {vsErrorBlob.AsString()}\nPS: {psErrorBlob.AsString()}");
+            }
+
+            _vertexShader = _device.CreateVertexShader(vsBlob.AsSpan());
+            _pixelShader = _device.CreatePixelShader(psBlob.AsSpan());
+
+            var inputElement = new Vortice.Direct3D11.InputElementDescription[]
+            {
+                new InputElementDescription("POSITION", 0, Format.R32G32B32A32_Float, 0, 0)
+            };
+            _inputLayout = _device.CreateInputLayout(inputElement, vsBlob.AsSpan());
+        }
+
+        private void CreateSamplers()
+        {
+            var samplerDesc = new SamplerDescription
+            {
+                Filter = Filter.MinMagMipLinear,
+                AddressU = TextureAddressMode.Clamp,
+                AddressV = TextureAddressMode.Clamp,
+                AddressW = TextureAddressMode.Clamp,
+                ComparisonFunc = ComparisonFunction.Never,
+                BorderColor = new Color4(0, 0, 0, 0)
+            };
+            _sampler = _device!.CreateSamplerState(samplerDesc);
         }
 
         public void SetSeries(DicomSeries series, RenderMode mode)
@@ -101,93 +228,200 @@ namespace MedicalRenderDemo
 
             _series = series;
             _renderMode = mode;
-
+            _volumeData = series.BuildVolume(); // Build CPU volume
             // TODO: 根据 mode 和 series 构建体数据、创建纹理、设置着色器常量等
             RebuildResources();
         }
 
         private void RebuildResources()
         {
-            if (_series == null) return;
+            if (_volumeData == null || _device == null) return;
 
+            // Create 3D texture (for future use in GPU-based slicing)
+            CreateVolumeTexture();
+
+            // For now, 2D slices are extracted on CPU
             switch (_renderMode)
             {
                 case RenderMode.AxialSlice:
-                    // 加载第一帧作为默认切片
+                    CurrentSliceIndex = Math.Clamp(CurrentSliceIndex, 0, _volumeData.Depth - 1);
                     break;
                 case RenderMode.CoronalSlice:
+                    CurrentSliceIndex = Math.Clamp(CurrentSliceIndex, 0, _volumeData.Height - 1);
+                    break;
                 case RenderMode.SagittalSlice:
-                case RenderMode.Volume3D:
-                    // 构建 3D 体数据（Volume）
-                    BuildVolume();
+                    CurrentSliceIndex = Math.Clamp(CurrentSliceIndex, 0, _volumeData.Width - 1);
                     break;
             }
         }
 
-        private void BuildVolume()
+        private void CreateVolumeTexture()
         {
-            // TODO: 将 _series.Files 合并为 3D short[] 数组
-            // 并上传到 GPU 纹理（如 Texture3D）
+            if (_volumeData == null) return;
+
+            _volumeTexture?.Dispose();
+            _volumeTextureView?.Dispose();
+
+            var texDesc = new Texture3DDescription
+            {
+                Width = (uint)_volumeData.Width,
+                Height = (uint)_volumeData.Height,
+                Depth = (uint)_volumeData.Depth,
+                MipLevels = 1,
+                Format = Format.R16_SInt,
+                Usage = ResourceUsage.Default,
+                BindFlags = BindFlags.ShaderResource,
+                CPUAccessFlags = CpuAccessFlags.None,
+                MiscFlags = ResourceOptionFlags.None
+            };
+
+            var DataPointer = Marshal.UnsafeAddrOfPinnedArrayElement(_volumeData.Voxels, 0);
+            var RowPitch = _volumeData.Width * sizeof(short);
+            var SlicePitch = _volumeData.Width * _volumeData.Height * sizeof(short);
+
+            var initData = new SubresourceData(DataPointer, (uint)RowPitch, (uint)SlicePitch);
+            _volumeTexture = _device!.CreateTexture3D(texDesc, initData);
+            _volumeTextureView = _device.CreateShaderResourceView(_volumeTexture);
+        }
+
+        private byte[] ExtractSlice()
+        {
+            if (_volumeData == null || _series == null) return new byte[0];
+
+            int w = _volumeData.Width;
+            int h = _volumeData.Height;
+            int d = _volumeData.Depth;
+            var voxels = _volumeData.Voxels;
+
+            byte[] slice = [];
+            ushort[] sourceSlice = Array.Empty<ushort>();
+
+            switch (_renderMode)
+            {
+                case RenderMode.AxialSlice:
+                    w = _volumeData.Width;
+                    h = _volumeData.Height;
+                    int axialIndex = Math.Clamp(CurrentSliceIndex, 0, _volumeData.Depth - 1);
+                    sourceSlice = new ushort[w * h];
+                    for (int i = 0; i < w * h; i++)
+                        sourceSlice[i] = _volumeData.Voxels[i + axialIndex * w * h];
+                    break;
+
+                case RenderMode.CoronalSlice:
+                    w = _volumeData.Width;
+                    h = _volumeData.Depth;
+                    int coronalIndex = Math.Clamp(CurrentSliceIndex, 0, _volumeData.Height - 1);
+                    sourceSlice = new ushort[w * h];
+                    for (int y = 0; y < h; y++)
+                        for (int x = 0; x < w; x++)
+                            sourceSlice[x + y * w] = _volumeData.Voxels[x + coronalIndex * w + y * w * _volumeData.Height];
+                    break;
+
+                case RenderMode.SagittalSlice:
+                    w = _volumeData.Height;
+                    h = _volumeData.Depth;
+                    int sagittalIndex = Math.Clamp(CurrentSliceIndex, 0, _volumeData.Width - 1);
+                    sourceSlice = new ushort[w * h];
+                    for (int y = 0; y < h; y++)
+                        for (int z = 0; z < w; z++)
+                            sourceSlice[z + y * w] = _volumeData.Voxels[sagittalIndex + z * _volumeData.Width + y * _volumeData.Width * _volumeData.Height];
+                    break;
+
+                default:
+                    return new byte[w * h];
+            }
+            // 👇 关键：窗宽窗位映射到 [0, 255]
+            var result = new byte[sourceSlice.Length];
+            int wc = _series.WindowCenter;
+            int ww = _series.WindowWidth;
+            float min = wc - ww / 2.0f;
+            float max = wc + ww / 2.0f;
+            float scale = 255.0f / (max - min);
+
+            for (int i = 0; i < sourceSlice.Length; i++)
+            {
+                float val = sourceSlice[i];
+                val = Math.Clamp((val - min) * scale, 0, 255);
+                result[i] = (byte)val;
+            }
+            //Debug.WriteLine($"Slice data: Min={result.Min()}, Max={result.Max()}");
+            //return Enumerable.Repeat((byte)255, Width * Height).ToArray();
+            return result;
+        }
+
+        private byte MapPixelToByte(short pixel)
+        {
+            float min = WindowLevel - WindowWidth / 2.0f;
+            float max = WindowLevel + WindowWidth / 2.0f;
+            float normalized = Math.Clamp((pixel - min) / (max - min), 0, 1);
+            return (byte)(normalized * 255);
+        }
+
+        private void EnsureSliceTextureSize(int width, int height)
+        {
+            if (_sliceTexture != null &&
+                (_sliceTexture.Description.Width != width || _sliceTexture.Description.Height != height))
+            {
+                _sliceTextureView?.Dispose();
+                _sliceTexture?.Dispose();
+                _sliceTexture = null;
+            }
+
+            if (_sliceTexture == null)
+            {
+                var desc = new Texture2DDescription
+                {
+                    Width = (uint)width,
+                    Height = (uint)height,
+                    MipLevels = 1,
+                    ArraySize = 1,
+                    Format = Format.R8_UNorm,
+                    SampleDescription = new SampleDescription(1, 0),
+                    Usage = ResourceUsage.Default,
+                    BindFlags = BindFlags.ShaderResource,
+                    CPUAccessFlags = CpuAccessFlags.None,
+                    MiscFlags = ResourceOptionFlags.None
+                };
+                _sliceTexture = _device!.CreateTexture2D(desc);
+                _sliceTextureView = _device.CreateShaderResourceView(_sliceTexture);
+            }
         }
 
         public void Render()
         {
-            if (_series == null) return;
+            if (_context == null || _renderTargetView == null || _volumeData == null) return;
+            if (_sampler == null || _volumeData == null) return;
 
-            // 根据 _renderMode 执行不同渲染逻辑
-            switch (_renderMode)
-            {
-                case RenderMode.AxialSlice:
-                    RenderAxial();
-                    break;
-                case RenderMode.CoronalSlice:
-                    RenderCoronal();
-                    break;
-                case RenderMode.SagittalSlice:
-                    RenderSagittalSlice();
-                    break;
-                case RenderMode.Volume3D:
-                    RenderVolume3D();
-                    break;
-                    // ... 其他
-            }
+            //_context.Rasterizer.State = _device.CreateRasterizerState(new RasterizerStateDescription
+            //{
+            //    FillMode = FillMode.Solid,
+            //    CullMode = CullMode.None, // 👈 关闭剔除
+            //    IsFrontCounterClockwise = false,
+            //    DepthClipEnable = true
+            //});
 
-            // Present
-        }
+            var sliceData = ExtractSlice();
 
-        private void RenderAxial()
-        {
-            // 渲染当前 axial 切片（例如第 0 帧）
-            if (_context == null || _renderTargetView == null) return;
+            EnsureSliceTextureSize(Width, Height);
 
-            _context.ClearRenderTargetView(_renderTargetView, new Color4(0.1f, 0.2f, 0.3f, 1.0f));
-            _swapChain!.Present(1, PresentFlags.None);
-        }
+            // Update 2D texture
+            _context.UpdateSubresource(sliceData, _sliceTexture!);
 
-        private void RenderCoronal()
-        {
-            // 渲染 coronal 切面（需体数据支持）
-            if (_context == null || _renderTargetView == null) return;
+            // Render full-screen quad
+            _context.ClearRenderTargetView(_renderTargetView, new Color4(0, 0, 0, 1));
+            _context.OMSetRenderTargets(_renderTargetView);
+            _context.VSSetShader(_vertexShader);
+            _context.PSSetShader(_pixelShader);
+            _context.IASetInputLayout(_inputLayout);
+            _context.PSSetShaderResources(0, new[] { _sliceTextureView });
+            _context.PSSetSamplers(0, new[] { _sampler });
+            _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleStrip);
+            ID3D11Buffer?[] buffers = { _vertexBuffer };
+            uint[] strides = { 16 };   // Vector4 = 16 bytes
+            uint[] offsets = { 0 };
+            _context.IASetVertexBuffers(0, buffers, strides, offsets);
+            _context.Draw(4, 0);
 
-            _context.ClearRenderTargetView(_renderTargetView, new Color4(0.8f, 0.2f, 0.3f, 1.0f));
-            _swapChain!.Present(1, PresentFlags.None);
-        }
-
-        private void RenderSagittalSlice()
-        {
-            // 渲染 coronal 切面（需体数据支持）
-            if (_context == null || _renderTargetView == null) return;
-
-            _context.ClearRenderTargetView(_renderTargetView, new Color4(0.1f, 0.2f, 0.5f, 1.0f));
-            _swapChain!.Present(1, PresentFlags.None);
-        }
-
-        private void RenderVolume3D()
-        {
-            // 渲染 coronal 切面（需体数据支持）
-            if (_context == null || _renderTargetView == null) return;
-
-            _context.ClearRenderTargetView(_renderTargetView, new Color4(0.1f, 0.3f, 0.3f, 1.0f));
             _swapChain!.Present(1, PresentFlags.None);
         }
 
@@ -202,45 +436,24 @@ namespace MedicalRenderDemo
         public void Resize(uint width, uint height)
         {
             _renderTargetView?.Dispose();
-            _swapChain.ResizeBuffers(2, width, height, Format.Unknown, SwapChainFlags.None);
+            _swapChain?.ResizeBuffers(2, width, height, Format.Unknown, SwapChainFlags.None);
+            Width = (int)width;
+            Height = (int)height;
             CreateRenderTargetView();
-        }
-        private void CreateTexture()
-        {
-            var texDesc = new Texture2DDescription
-            {
-                Width = (uint)Width,
-                Height = (uint)Height,
-                MipLevels = 1,
-                ArraySize = 1,
-                Format = Format.R8_UNorm,
-                SampleDescription = new SampleDescription(1, 0),
-                Usage = ResourceUsage.Default,
-                BindFlags = BindFlags.ShaderResource,
-                CPUAccessFlags = CpuAccessFlags.None,
-                MiscFlags = ResourceOptionFlags.None
-            };
-
-            _texture = _device!.CreateTexture2D(texDesc);
-            _textureView = _device.CreateShaderResourceView(_texture);
-        }
-
-        public void UpdateTexture(byte[] pixelData)
-        {
-            if (_texture == null || _context == null) return;
-
-            // 可选：验证数据大小（调试用）
-            if (pixelData.Length != Width * Height)
-                throw new ArgumentException("pixelData size must be Width * Height for R8_UNorm format.");
-            //var box = new Box(0, 0, 0, Width, Height, 1);
-            _context.UpdateSubresource(pixelData, _texture);
         }
 
         public void Dispose()
         {
             _renderTargetView?.Dispose();
-            _textureView?.Dispose();
-            _texture?.Dispose();
+            _sliceTextureView?.Dispose();
+            _sliceTexture?.Dispose();
+            _volumeTextureView?.Dispose();
+            _volumeTexture?.Dispose();
+            _vertexBuffer?.Dispose();
+            _inputLayout?.Dispose();
+            _vertexShader?.Dispose();
+            _pixelShader?.Dispose();
+            _sampler?.Dispose();
             _swapChain?.Dispose();
             _context?.Dispose();
             _device?.Dispose();

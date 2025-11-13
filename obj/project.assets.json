@@ -446,10 +446,10 @@
           }
         },
         "build": {
-          "build/_._": {}
+          "build/Vortice.DXGI.props": {}
         },
         "buildMultiTargeting": {
-          "buildMultiTargeting/_._": {}
+          "buildMultiTargeting/Vortice.DXGI.props": {}
         }
       },
       "Vortice.Mathematics/1.9.2": {
@@ -1246,6 +1246,7 @@
   "projectFileDependencyGroups": {
     "net8.0-windows7.0": [
       "Vortice.D3DCompiler >= 3.6.2",
+      "Vortice.DXGI >= 3.6.2",
       "Vortice.Direct3D11 >= 3.6.2",
       "fo-dicom >= 5.2.4"
     ]
@@ -1296,6 +1297,10 @@
         "targetAlias": "net8.0-windows",
         "dependencies": {
           "Vortice.D3DCompiler": {
+            "target": "Package",
+            "version": "[3.6.2, )"
+          },
+          "Vortice.DXGI": {
             "target": "Package",
             "version": "[3.6.2, )"
           },

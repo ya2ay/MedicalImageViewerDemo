@@ -9,6 +9,7 @@
       "MedicalRenderDemo/1.0.0": {
         "dependencies": {
           "Vortice.D3DCompiler": "3.6.2",
+          "Vortice.DXGI": "3.6.2",
           "Vortice.Direct3D11": "3.6.2",
           "fo-dicom": "5.2.4"
         },

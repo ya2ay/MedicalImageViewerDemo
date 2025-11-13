@@ -17,6 +17,7 @@ using WinMessageBox = System.Windows.MessageBox;
 using IOPath = System.IO.Path;
 using FellowOakDicom.Log;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.Window;
+using System.Text;
 
 
 namespace MedicalRenderDemo
@@ -27,6 +28,7 @@ namespace MedicalRenderDemo
     public partial class MainWindow : Window
     {
         private DicomSeries? _currentSeries; // 注意：DicomSeries 是你自定义的类
+
         public MainWindow()
         {
             InitializeComponent();
@@ -47,7 +49,7 @@ namespace MedicalRenderDemo
                     int cols = first.Dataset.GetValue<int>(DicomTag.Columns, 0);
                     WinMessageBox.Show($"Loaded {files.Length} slices, size: {cols}x{rows}");
 
-                    _currentSeries = DicomSeries.LoadFromFolder(folder);
+                    _currentSeries = LoadFromFolder(folder);
 
                     // 分配数据
                     Host3D.SetDicomSeries(_currentSeries, DirectXRenderer.RenderMode.Volume3D);
@@ -60,6 +62,40 @@ namespace MedicalRenderDemo
                     WinMessageBox.Show("Error: " + ex.Message);
                 }
             }
+        }
+
+        public DicomSeries LoadFromFolder(string folderPath)
+        {
+            var series = new DicomSeries();
+            var files = Directory.GetFiles(folderPath, "*.*", SearchOption.TopDirectoryOnly)
+                                 .Where(f => IsDicomFile(f))
+                                 .Select(f => DicomFile.Open(f))
+                                 .ToList();
+
+            if (files.Count == 0) throw new ArgumentException("No DICOM files found.");
+
+            // 按 ImagePositionPatient 排序（Z 轴）
+            files.Sort((a, b) =>
+            {
+                var posA = a.Dataset.GetValues<double>(DicomTag.ImagePositionPatient);
+                var posB = b.Dataset.GetValues<double>(DicomTag.ImagePositionPatient);
+                return posA[2].CompareTo(posB[2]); // Z 坐标
+            });
+
+            series.Files.AddRange(files);
+            return series;
+        }
+
+        private static bool IsDicomFile(string path)
+        {
+            try
+            {
+                using var stream = File.OpenRead(path);
+                var buffer = new byte[128 + 4];
+                stream.Read(buffer, 0, buffer.Length);
+                return Encoding.ASCII.GetString(buffer, 128, 4) == "DICM";
+            }
+            catch { return false; }
         }
     }
 }
