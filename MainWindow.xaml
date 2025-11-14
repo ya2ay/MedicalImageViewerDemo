@@ -5,9 +5,9 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:MedicalRenderDemo"
         mc:Ignorable="d"
-        Title="MainWindow" Height="1000" Width="1300">
+        Title="MainWindow">
     <!-- 将 Grid 作为 Window 的唯一内容 -->
-    <Grid>
+    <Grid Height="Auto" Width="Auto">
         <!-- 定义外层 Grid 的行 -->
         <Grid.RowDefinitions>
             <!-- 顶部按钮行 -->
@@ -23,47 +23,43 @@
                 Margin="5" 
                 Padding="10,5" 
                 HorizontalAlignment="Left" 
-                Click="OnLoadClick"/>
+                Click="OnLoadClick" Width="50" Height="30"/>
 
         <!-- 原有的三列内容区域 -->
-        <Grid Margin="0,37,234,0" Grid.RowSpan="2">
-            <!-- 定义主内容 Grid 的列 -->
+        <Grid Grid.Row="1" Margin="5">
             <Grid.ColumnDefinitions>
-                <!-- 左侧列表列 -->
+                <!-- 左侧列表区 (100px) -->
                 <ColumnDefinition Width="100"/>
-                <!-- 中间 D3DHost 列 -->
-                <ColumnDefinition Width="900"/>
-                <!-- 右侧包含三个 D3DHost 的列 -->
-                <ColumnDefinition Width="300"/>
+                <!-- 中间主视图区 (弹性填充) -->
+                <ColumnDefinition Width="3*"/>
+                <!-- 右侧三视图区 (建议固定宽度，例如 250px) -->
+                <ColumnDefinition Width="1*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- 左侧列表控件 -->
-            <ListBox Name="MyListBox" Grid.Column="0" Margin="5">
+            <!-- 左侧 ListBox -->
+            <ListBox Name="MyListBox" Margin="5" VerticalAlignment="Top" Height="90">
                 <ListBoxItem Content="Item 1"/>
                 <ListBoxItem Content="Item 2"/>
                 <ListBoxItem Content="Item 3"/>
             </ListBox>
 
-            <!-- 中间的 D3DHost 控件 -->
+            <!-- 中间 Axial 视图 -->
             <local:D3DHost x:Name="HostAxial" Grid.Column="1" Margin="5"/>
 
-            <!-- 右侧区域 - 包含三个 D3DHost 的嵌套 Grid -->
-            <Grid Grid.Column="2" Margin="5">
-                <!-- 定义嵌套 Grid 的行 -->
+            <!-- 右侧三视图容器 -->
+            <Grid Grid.Column="2">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="1*"/>
+                    <!-- Coronal -->
+                    <RowDefinition Height="1*"/>
+                    <!-- Sagittal -->
+                    <RowDefinition Height="1*"/>
+                    <!-- 3D -->
                 </Grid.RowDefinitions>
 
-                <!-- 上方 D3DHost -->
-                <local:D3DHost x:Name="HostCoronal" Grid.Row="0" Margin="0,0,0,2.5"/>
-
-                <!-- 中方 D3DHost -->
-                <local:D3DHost x:Name="HostSagittal" Grid.Row="1" Margin="0,2.5,0,2.5"/>
-
-                <!-- 下方 D3DHost -->
-                <local:D3DHost x:Name="Host3D" Grid.Row="2" Margin="0,2.5,0,0"/>
+                <local:D3DHost x:Name="HostCoronal" Grid.Row="0" Margin="5"/>
+                <local:D3DHost x:Name="HostSagittal" Grid.Row="1" Margin="5"/>
+                <local:D3DHost x:Name="Host3D" Grid.Row="2" Margin="5"/>
             </Grid>
         </Grid>
     </Grid>

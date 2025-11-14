@@ -71,6 +71,7 @@ namespace MedicalRenderDemo
         public int CurrentSliceIndex { get; set; } = 0;
         public float WindowWidth { get; set; } = 400;   // CT default
         public float WindowLevel { get; set; } = 40;    // CT soft tissue
+        private const int _bufferCount = 2;
 
         public DirectXRenderer(IntPtr hwnd, int width, int height)
         {
@@ -97,8 +98,24 @@ namespace MedicalRenderDemo
                 featureLevels: new[] { FeatureLevel.Level_11_0 }, // 支持的特性级别
                 device: out _device,                    // 输出设备
                 featureLevel: out _,                   // 实际使用的特性级别（可忽略）
-                immediateContext: out _context                   // 输出上下文
+                immediateContext: out ID3D11DeviceContext baseContext                   // 输出上下文
             );
+
+            if (!result.Success)
+            {
+                throw new Exception($"Failed to create D3D11 device: {result}");
+            }
+
+            // Step 2: 尝试升级到 ID3D11DeviceContext3
+            ID3D11DeviceContext3? context3 = baseContext.QueryInterface<ID3D11DeviceContext3>();
+            if (context3 != null)
+            {
+                _context = context3; // 使用高级接口
+            }
+            else
+            {
+                _context = baseContext; // 回退到基础接口
+            }
 
             result.CheckError();
 
@@ -111,7 +128,7 @@ namespace MedicalRenderDemo
                 Stereo = false,
                 SampleDescription = new SampleDescription(1, 0),
                 BufferUsage = Usage.RenderTargetOutput,
-                BufferCount = 2,
+                BufferCount = _bufferCount,
                 Scaling = Scaling.Stretch,
                 SwapEffect = SwapEffect.FlipSequential,
                 AlphaMode = AlphaMode.Ignore
@@ -178,7 +195,7 @@ namespace MedicalRenderDemo
                 shaderSource: vsCode,
                 entryPoint: "main",
                 sourceName: "FullScreenVS.hlsl",
-                profile: "vs_5_0", 
+                profile: "vs_5_0",
                 out Blob vsBlob,
                 out Blob vsErrorBlob
             );
@@ -229,7 +246,6 @@ namespace MedicalRenderDemo
             _series = series;
             _renderMode = mode;
             _volumeData = series.BuildVolume(); // Build CPU volume
-            // TODO: 根据 mode 和 series 构建体数据、创建纹理、设置着色器常量等
             RebuildResources();
         }
 
@@ -286,7 +302,8 @@ namespace MedicalRenderDemo
 
         private byte[] ExtractSlice()
         {
-            if (_volumeData == null || _series == null) return new byte[0];
+            if (_volumeData == null || _series == null) 
+                return new byte[0];
 
             int w = _volumeData.Width;
             int h = _volumeData.Height;
@@ -330,7 +347,7 @@ namespace MedicalRenderDemo
                 default:
                     return new byte[w * h];
             }
-            // 👇 关键：窗宽窗位映射到 [0, 255]
+            //窗宽窗位映射到 [0, 255]
             var result = new byte[sourceSlice.Length];
             int wc = _series.WindowCenter;
             int ww = _series.WindowWidth;
@@ -344,17 +361,8 @@ namespace MedicalRenderDemo
                 val = Math.Clamp((val - min) * scale, 0, 255);
                 result[i] = (byte)val;
             }
-            //Debug.WriteLine($"Slice data: Min={result.Min()}, Max={result.Max()}");
-            //return Enumerable.Repeat((byte)255, Width * Height).ToArray();
-            return result;
-        }
-
-        private byte MapPixelToByte(short pixel)
-        {
-            float min = WindowLevel - WindowWidth / 2.0f;
-            float max = WindowLevel + WindowWidth / 2.0f;
-            float normalized = Math.Clamp((pixel - min) / (max - min), 0, 1);
-            return (byte)(normalized * 255);
+            return Enumerable.Repeat((byte)255, sourceSlice.Length).ToArray(); // 强制白色
+            //return result;
         }
 
         private void EnsureSliceTextureSize(int width, int height)
@@ -392,17 +400,31 @@ namespace MedicalRenderDemo
             if (_context == null || _renderTargetView == null || _volumeData == null) return;
             if (_sampler == null || _volumeData == null) return;
 
-            //_context.Rasterizer.State = _device.CreateRasterizerState(new RasterizerStateDescription
-            //{
-            //    FillMode = FillMode.Solid,
-            //    CullMode = CullMode.None, // 👈 关闭剔除
-            //    IsFrontCounterClockwise = false,
-            //    DepthClipEnable = true
-            //});
+            _context.ClearRenderTargetView(_renderTargetView, new Color4(1, 0, 0, 1)); // 红色
 
             var sliceData = ExtractSlice();
+            if (sliceData.Length == 0) return;
 
-            EnsureSliceTextureSize(Width, Height);
+            int sliceWidth = _volumeData.Width;
+            int sliceHeight = _volumeData.Height;
+
+            switch (_renderMode)
+            {
+                case RenderMode.AxialSlice:
+                    sliceWidth = _volumeData.Width;
+                    sliceHeight = _volumeData.Height;
+                    break;
+                case RenderMode.CoronalSlice:
+                    sliceWidth = _volumeData.Width;
+                    sliceHeight = _volumeData.Depth;
+                    break;
+                case RenderMode.SagittalSlice:
+                    sliceWidth = _volumeData.Height;
+                    sliceHeight = _volumeData.Depth;
+                    break;
+            }
+
+            EnsureSliceTextureSize(sliceWidth, sliceHeight);
 
             // Update 2D texture
             _context.UpdateSubresource(sliceData, _sliceTexture!);
@@ -435,8 +457,11 @@ namespace MedicalRenderDemo
 
         public void Resize(uint width, uint height)
         {
+            if (width == 0 || height == 0)
+                return;
+
             _renderTargetView?.Dispose();
-            _swapChain?.ResizeBuffers(2, width, height, Format.Unknown, SwapChainFlags.None);
+            _swapChain?.ResizeBuffers(_bufferCount, width, height, Format.Unknown, SwapChainFlags.None);
             Width = (int)width;
             Height = (int)height;
             CreateRenderTargetView();

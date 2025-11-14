@@ -52,10 +52,10 @@ namespace MedicalRenderDemo
                     _currentSeries = LoadFromFolder(folder);
 
                     // 分配数据
-                    Host3D.SetDicomSeries(_currentSeries, DirectXRenderer.RenderMode.Volume3D);
                     HostAxial.SetDicomSeries(_currentSeries, DirectXRenderer.RenderMode.AxialSlice);
                     HostCoronal.SetDicomSeries(_currentSeries, DirectXRenderer.RenderMode.CoronalSlice);
                     HostSagittal.SetDicomSeries(_currentSeries, DirectXRenderer.RenderMode.SagittalSlice);
+                    Host3D.SetDicomSeries(_currentSeries, DirectXRenderer.RenderMode.Volume3D);
                 }
                 catch (Exception ex)
                 {

@@ -3,17 +3,19 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+
+using System.Windows;
+using System.Windows.Media;
 using WinFormsPanel = System.Windows.Forms.Panel;
 using WinUserControl = System.Windows.Controls.UserControl;
+using WinSize = System.Windows.Size;
 namespace MedicalRenderDemo
 {
     /// <summary>
@@ -58,6 +60,19 @@ namespace MedicalRenderDemo
             SetDicomSeries(series);
         }
 
+        protected override WinSize MeasureOverride(WinSize availableSize)
+        {
+            // 取可用空间中较小的一维，形成正方形
+            double min = Math.Min(availableSize.Width, availableSize.Height);
+            return new WinSize(min, min);
+        }
+
+        protected override WinSize ArrangeOverride(WinSize finalSize)
+        {
+            // 实际排列也使用正方形
+            double size = Math.Min(finalSize.Width, finalSize.Height);
+            return base.ArrangeOverride(new WinSize(size, size));
+        }
         // D3DHost.xaml.cs —— 在类中添加
         public int CurrentSliceIndex
         {
@@ -91,6 +106,17 @@ namespace MedicalRenderDemo
             int height = (int)host.ActualHeight;
             _renderer = new DirectXRenderer(_panel.Handle, width, height);
             CompositionTarget.Rendering += OnRendering;
+            // 监听尺寸变化
+            host.SizeChanged += OnHostSizeChanged;
+        }
+
+        private void OnHostSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (_renderer != null)
+            {
+                // 更新 Direct3D 渲染目标尺寸
+                _renderer.Resize((uint)e.NewSize.Width, (uint)e.NewSize.Height);
+            }
         }
 
         private void OnUnloaded(object sender, RoutedEventArgs e)

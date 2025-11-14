@@ -55,7 +55,6 @@ namespace MedicalRenderDemo
                 {
                     bitsAllocated = 16; // 默认值
                 }
-                //int bitsAllocated = dataset.GetValue<int>(DicomTag.BitsAllocated, 16);
 
                 if (bitsAllocated == 16)
                 {
